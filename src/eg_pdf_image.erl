@@ -431,11 +431,11 @@ extractScanLines(Width,Decompressed) ->
     
 extractLine(ScanLines,Width,<< >>) ->
   AlmostDone = lists:reverse(ScanLines),
-  [ {0, string:chars(0,Width-1)} | AlmostDone];
+  [ {0, list_to_binary(string:chars(0,Width-1))} | AlmostDone];
 extractLine(ScanLines,Width,Image) ->
   LineSize = Width - 1,
   << Method:8, Line:LineSize/binary-unit:8, Rest/binary>> = Image,
-  extractLine([{Method,  binary_to_list(Line) } | ScanLines ], Width, Rest).  
+  extractLine([{Method,  Line} | ScanLines ], Width, Rest).  
   
 %% @doc Remove the filter on all the bytes in the scan lines.
 
@@ -448,19 +448,26 @@ processLine([{_Method, _Line1}], _Iter, _Offset, Results)->
    A = lists:flatten( lists:reverse(Results) ),
    list_to_binary( A );
 processLine([{_, Line1},{Method, Line2} | Remainder], Iter, Offset, Results) ->
-  {ok, Unfiltered} = defilter(Method, Line1, Line2,Offset,length(Line1),Iter),
+  {ok, Unfiltered} = defilter(Method, Line1, Line2,Offset,size(Line1),Iter),
   processLine([{Method, Unfiltered } | Remainder], Iter, Offset, [Unfiltered | Results] ).
 
 %% @doc Taking two lines of stream defilter the 2nd with the previously defiltered 1st line.
   
 defilter(Method, Line1, Line2, Offset, Width, Iter) when Iter =< Width ->
   NewVal = case Iter =< Offset of
-    true ->  filter(lists:nth(Iter,Line2), 0, lists:nth(Iter,Line1), 0, Method);
-    false ->  filter(lists:nth(Iter,Line2), lists:nth(Iter-Offset,Line2), lists:nth(Iter,Line1), lists:nth(Iter-Offset,Line1), Method)
+    true ->  filter(binary:at(Line2, Iter - 1), 0, 
+                    binary:at(Line1, Iter - 1), 0, Method);
+    false ->  filter(binary:at(Line2, Iter - 1),
+                     binary:at(Line2, Iter - Offset - 1),
+                     binary:at(Line1, Iter - 1),
+                     binary:at(Line1, Iter - Offset - 1), Method)
     end,
     L2 = case Iter == Width of
-      true -> lists:flatten([lists:sublist(Line2,Iter - 1),NewVal]);
-      false -> lists:flatten([lists:sublist(Line2,Iter - 1),NewVal,lists:nthtail(Iter, Line2)])
+      true -> Start = binary:part(Line2, 0, Iter - 1),
+              <<Start/binary, NewVal>>;
+      false -> Start = binary:part(Line2, 0, Iter - 1),
+               End = binary:part(Line2, Iter, size(Line2) - Iter),
+               <<Start/binary, NewVal, End/binary>>
     end,
     defilter(Method, Line1, L2 ,Offset, Width, Iter+1);
 defilter(_Method, _Line1, Line2, _Offset, _Width, _Iter) ->
@@ -513,8 +520,7 @@ inflate_stream(Data) ->
   Decompressed = zlib:inflate(Z, Data),
   ok = zlib:inflateEnd(Z),
   zlib:close(Z),
-  F = fun(A, B) -> <<A/binary, B/binary>> end,
-  MergedBinaries = lists:foldr(F, <<>>, Decompressed),
+  MergedBinaries = iolist_to_binary(Decompressed),
   {ok,MergedBinaries}.
   
 %% @doc Compress a bit stream using the zlib/deflate algorithm
